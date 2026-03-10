@@ -522,7 +522,7 @@ def create_party(leader_id: str, members: list, target: str = None, name: str = 
             " VALUES (?,?,?,?,?,?)",
             (leader_id, json.dumps(members), name, target, "active", _now())
         )
-        return cur.lastrowid
+        return con.execute("SELECT last_insert_rowid()").fetchone()[0]
 
 def disband_party(party_id: int):
     with db_transaction() as con:
@@ -656,7 +656,7 @@ When a player attempts something beyond their stats, they CAN FAIL and get INJUR
   * Near-death (severity 9):   recovery 5h,  debuffs: {"strength": -5, "wisdom": -2, "influence": -2}
 
 ## Language
-Always match the player's language. Persian gets Persian."""
+Always respond in English only, regardless of the player's language."""
 
 async def _call_gm(messages: list) -> dict:
     headers = {"Authorization": f"Bearer {AIMLAPI_KEY}", "Content-Type": "application/json"}
@@ -738,14 +738,84 @@ intents.members = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-rp_cooldowns: dict  = {}
-raid_cooldowns: dict = {}   # [FIX-3]
+rp_cooldowns: dict   = {}
+raid_cooldowns: dict = {}
+rp_daily: dict       = {}   # uid -> {"date": "2026-03-10", "count": 3}
+duel_invites: dict   = {}   # uid -> {"target": uid, "expires": timestamp}
+
+RP_DAILY_LIMIT = 5
+DUEL_COOLDOWN  = 60
+PVP_BUFF_HOURS = 168   # 7 days
+
+def _today() -> str:
+    return datetime.datetime.utcnow().strftime("%Y-%m-%d")
+
+def _check_daily_rp(uid: str) -> tuple:
+    today = _today()
+    entry = rp_daily.get(uid, {"date": "", "count": 0})
+    if entry["date"] != today:
+        rp_daily[uid] = {"date": today, "count": 0}
+        return True, RP_DAILY_LIMIT
+    remaining = RP_DAILY_LIMIT - entry["count"]
+    return remaining > 0, remaining
+
+def _use_daily_rp(uid: str):
+    today = _today()
+    entry = rp_daily.get(uid, {"date": today, "count": 0})
+    if entry["date"] != today:
+        entry = {"date": today, "count": 0}
+    entry["count"] += 1
+    rp_daily[uid] = entry
+
+def _init_pvp_tables(con):
+    con.execute("""CREATE TABLE IF NOT EXISTS pvp_stats (
+        user_id TEXT PRIMARY KEY, char_name TEXT NOT NULL,
+        wins INTEGER DEFAULT 0, losses INTEGER DEFAULT 0,
+        streak INTEGER DEFAULT 0, best_streak INTEGER DEFAULT 0,
+        last_updated TEXT)""")
+    con.execute("""CREATE TABLE IF NOT EXISTS pvp_buffs (
+        user_id TEXT PRIMARY KEY, buff_type TEXT NOT NULL,
+        expires_at TEXT NOT NULL, granted_at TEXT NOT NULL)""")
+
+def _update_pvp(winner_id: str, winner_name: str, loser_id: str, loser_name: str):
+    with db_transaction() as con:
+        _init_pvp_tables(con)
+        con.execute("""INSERT INTO pvp_stats (user_id,char_name,wins,losses,streak,best_streak,last_updated)
+            VALUES (?,?,1,0,1,1,?) ON CONFLICT(user_id) DO UPDATE SET
+            char_name=excluded.char_name, wins=wins+1, streak=streak+1,
+            best_streak=MAX(best_streak,streak+1), last_updated=excluded.last_updated
+        """, (winner_id, winner_name, _now()))
+        con.execute("""INSERT INTO pvp_stats (user_id,char_name,wins,losses,streak,best_streak,last_updated)
+            VALUES (?,?,0,1,0,0,?) ON CONFLICT(user_id) DO UPDATE SET
+            char_name=excluded.char_name, losses=losses+1, streak=0, last_updated=excluded.last_updated
+        """, (loser_id, loser_name, _now()))
+
+def _grant_pvp_buff(user_id: str, buff_type: str):
+    expires = (datetime.datetime.utcnow() + datetime.timedelta(hours=PVP_BUFF_HOURS)).isoformat()
+    with db_transaction() as con:
+        _init_pvp_tables(con)
+        con.execute("""INSERT INTO pvp_buffs (user_id,buff_type,expires_at,granted_at)
+            VALUES (?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET
+            buff_type=excluded.buff_type, expires_at=excluded.expires_at, granted_at=excluded.granted_at
+        """, (user_id, buff_type, expires, _now()))
+
+def _get_active_buff(user_id: str) -> dict:
+    con = get_db()
+    _init_pvp_tables(con)
+    row = con.execute("SELECT buff_type,expires_at FROM pvp_buffs WHERE user_id=?", (user_id,)).fetchone()
+    con.close()
+    if not row:
+        return {}
+    if datetime.datetime.utcnow() > datetime.datetime.fromisoformat(row["expires_at"]):
+        return {}
+    return {"type": row["buff_type"], "expires_at": row["expires_at"]}
 
 @bot.event
 async def on_ready():
     init_db()
     world_event_loop.start()
     monster_spawn_loop.start()
+    pvp_weekly_rewards.start()
     log.info(f"✅ Nixon RPG Engine v5 PATCHED — {bot.user}")
 
 @bot.event
@@ -950,7 +1020,20 @@ async def roleplay(ctx, *, action: str):
     if uid in rp_cooldowns and now - rp_cooldowns[uid] < RP_COOLDOWN:
         await ctx.reply(f"⏳ Wait **{int(RP_COOLDOWN-(now-rp_cooldowns[uid]))}s** before acting again.")
         return
+
+    can_act, remaining = _check_daily_rp(uid)
+    if not can_act:
+        embed = discord.Embed(
+            title="📅 Daily limit reached",
+            description=f"**{char['name']}** needs rest. You have used all **{RP_DAILY_LIMIT}** actions today.",
+            color=0x888888
+        )
+        embed.set_footer(text="Limit resets at midnight UTC. Use !pvp to fight other players.")
+        await ctx.reply(embed=embed)
+        return
+
     rp_cooldowns[uid] = now
+    _use_daily_rp(uid)
 
     world = load_world()
 
@@ -1059,6 +1142,8 @@ JSON only."""
                     if monster_killed["is_boss"]:
                         char["stats"]["strength"] = char["stats"].get("strength",10) + 3
                         char["stats"]["wisdom"]   = char["stats"].get("wisdom",10) + 2
+                        # CHAPTER TRANSITION — trigger world engine
+                        asyncio.create_task(_trigger_chapter_transition(ctx, monster_killed))
                     importance = max(importance, 8 if monster_killed["is_boss"] else 6)
                     remaining = load_monsters(territory=monster_killed["territory"], status="alive")
                     if not remaining:
@@ -1608,7 +1693,7 @@ async def propose_law(ctx, *, text: str):
             (f"Proposed Law by {char['name']}", text, json.dumps(options),
              json.dumps({"A":[],"B":[]}), str(ctx.channel.id), _now())
         )
-        event_id = con.lastrowid
+        event_id = con.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     embed = discord.Embed(
         title="📜 Law Proposed",
@@ -1661,6 +1746,183 @@ async def _resolve_law(channel, event_id: int, law_text: str, proposer: str):
             if thread:
                 await thread.send(f"⚖️ **Vote closed.**\n{result}")
         except Exception: pass
+
+
+# ──────────────────────────────────────────────────────────────
+# !duel  — challenge another player (requires acceptance)
+# ──────────────────────────────────────────────────────────────
+@bot.command(name="duel")
+async def duel(ctx, target: discord.Member = None):
+    uid = str(ctx.author.id)
+    char = load_character(uid)
+    if not char:
+        await ctx.reply("You need a character first."); return
+    if not target:
+        await ctx.reply("Usage: `!duel @player`"); return
+    tid = str(target.id)
+    if tid == uid:
+        await ctx.reply("You cannot duel yourself."); return
+    tchar = load_character(tid)
+    if not tchar:
+        await ctx.reply(f"**{target.display_name}** has no character."); return
+    if is_injured(char):
+        await ctx.reply(f"🩸 **{char['name']}** is injured and cannot duel. ({injury_time_left(char)} left)"); return
+
+    duel_invites[tid] = {"challenger_id": uid, "expires": time.time() + 60}
+
+    embed = discord.Embed(
+        title="⚔️ Duel Challenge!",
+        description=f"**{char['name']}** challenges **{tchar['name']}** to a duel!",
+        color=0xff6600
+    )
+    embed.add_field(name=f"{char['name']} Stats", value=f"⚔️{char['stats']['strength']} 📖{char['stats']['wisdom']} 👑{char['stats']['influence']}", inline=True)
+    embed.add_field(name=f"{tchar['name']} Stats", value=f"⚔️{tchar['stats']['strength']} 📖{tchar['stats']['wisdom']} 👑{tchar['stats']['influence']}", inline=True)
+    embed.add_field(name="⏳ Accept within", value="60 seconds — use `!accept`", inline=False)
+    embed.set_footer(text="No stats are lost — only honor and PvP ranking.")
+    await ctx.reply(f"{target.mention}", embed=embed)
+
+@bot.command(name="accept")
+async def accept_duel(ctx):
+    uid = str(ctx.author.id)
+    invite = duel_invites.get(uid)
+    if not invite or time.time() > invite["expires"]:
+        await ctx.reply("No pending duel challenge."); return
+
+    challenger_id = invite["challenger_id"]
+    del duel_invites[uid]
+
+    c1 = load_character(challenger_id)
+    c2 = load_character(uid)
+    if not c1 or not c2:
+        await ctx.reply("One of the characters no longer exists."); return
+
+    await _resolve_pvp(ctx, c1, challenger_id, c2, uid, "duel")
+
+# ──────────────────────────────────────────────────────────────
+# !attack  — surprise attack (no acceptance needed)
+# ──────────────────────────────────────────────────────────────
+@bot.command(name="attack")
+async def attack_player(ctx, target: discord.Member = None):
+    uid = str(ctx.author.id)
+    char = load_character(uid)
+    if not char:
+        await ctx.reply("You need a character first."); return
+    if not target:
+        await ctx.reply("Usage: `!attack @player`"); return
+    tid = str(target.id)
+    if tid == uid:
+        await ctx.reply("You cannot attack yourself."); return
+
+    now = time.time()
+    cooldown_key = f"attack_{uid}"
+    if cooldown_key in rp_cooldowns and now - rp_cooldowns[cooldown_key] < DUEL_COOLDOWN:
+        await ctx.reply(f"⏳ Wait **{int(DUEL_COOLDOWN-(now-rp_cooldowns[cooldown_key]))}s** before attacking again.")
+        return
+
+    tchar = load_character(tid)
+    if not tchar:
+        await ctx.reply(f"**{target.display_name}** has no character."); return
+    if is_injured(char):
+        await ctx.reply(f"🩸 **{char['name']}** is too injured to attack."); return
+
+    rp_cooldowns[cooldown_key] = now
+    await _resolve_pvp(ctx, char, uid, tchar, tid, "surprise_attack")
+
+# ──────────────────────────────────────────────────────────────
+# PvP Resolution — AI decides winner
+# ──────────────────────────────────────────────────────────────
+async def _resolve_pvp(ctx, c1: dict, uid1: str, c2: dict, uid2: str, pvp_type: str):
+    async with ctx.typing():
+        prompt = f"""PvP BATTLE — {pvp_type.replace("_"," ").upper()}
+
+Fighter 1: {c1["name"]} ({"NFT HERO" if c1["is_nft"] else "warrior"})
+  STR:{c1["stats"]["strength"]} WIS:{c1["stats"]["wisdom"]} INF:{c1["stats"]["influence"]} LEG:{c1["stats"]["legacy"]}
+  Archetype: {c1["identity"].get("archetype","?")}
+  Flaw: {c1["identity"].get("flaw","?")}
+
+Fighter 2: {c2["name"]} ({"NFT HERO" if c2["is_nft"] else "warrior"})
+  STR:{c2["stats"]["strength"]} WIS:{c2["stats"]["wisdom"]} INF:{c2["stats"]["influence"]} LEG:{c2["stats"]["legacy"]}
+  Archetype: {c2["identity"].get("archetype","?")}
+  Flaw: {c2["identity"].get("flaw","?")}
+
+Decide the winner based on stats, archetype, and narrative logic.
+No stats are lost — this is an honor duel. Make it dramatic and cinematic.
+Respond in JSON only:
+{{
+  "narrative": "Epic 2-3 paragraph battle description",
+  "winner": "1" or "2",
+  "winning_move": "The decisive action that ended the fight",
+  "honor_note": "One sentence about what each warrior proved"
+}}"""
+
+        try:
+            result = await _ai_json(prompt, max_tokens=800)
+        except Exception as e:
+            await ctx.reply(f"The GM is silent... (`{e}`)"); return
+
+        winner_num = str(result.get("winner", "1"))
+        if winner_num == "1":
+            winner, winner_id = c1, uid1
+            loser, loser_id   = c2, uid2
+        else:
+            winner, winner_id = c2, uid2
+            loser, loser_id   = c1, uid1
+
+        _update_pvp(winner_id, winner["name"], loser_id, loser["name"])
+
+        # buff winner influence slightly
+        winner["stats"]["influence"] = winner["stats"].get("influence", 0) + 2
+        save_character(winner)
+
+    embed = discord.Embed(
+        title=f"⚔️ {'Duel' if pvp_type=='duel' else 'Ambush'} — {winner['name']} Victorious!",
+        description=result.get("narrative", ""),
+        color=0xffd700
+    )
+    embed.add_field(name="🏆 Winner", value=f"**{winner['name']}** (+2 Influence)", inline=True)
+    embed.add_field(name="💀 Defeated", value=loser["name"], inline=True)
+    embed.add_field(name="Decisive Move", value=result.get("winning_move", ""), inline=False)
+    embed.add_field(name="Honor", value=result.get("honor_note", ""), inline=False)
+    embed.set_footer(text="No stats lost — rankings updated. Use !pvp to see leaderboard.")
+    await ctx.reply(embed=embed)
+
+# ──────────────────────────────────────────────────────────────
+# !pvp  — PvP leaderboard
+# ──────────────────────────────────────────────────────────────
+@bot.command(name="pvp")
+async def pvp_leaderboard(ctx):
+    con = get_db()
+    _init_pvp_tables(con)
+    rows = con.execute(
+        "SELECT user_id,char_name,wins,losses,streak,best_streak FROM pvp_stats ORDER BY wins DESC, streak DESC LIMIT 10"
+    ).fetchall()
+    con.close()
+
+    embed = discord.Embed(title="⚔️ PvP Arena — Rankings", color=0xff4400)
+
+    if not rows:
+        embed.description = "_No battles fought yet. Use `!duel @player` to challenge someone._"
+        await ctx.reply(embed=embed); return
+
+    medals = ["🥇","🥈","🥉"]
+    for i, row in enumerate(rows):
+        active_buff = _get_active_buff(row["user_id"])
+        buff_str = f" 🔥 **{active_buff['type']} buff active**" if active_buff else ""
+        wl = f"W:{row['wins']} L:{row['losses']}"
+        ratio = round(row["wins"] / max(1, row["wins"]+row["losses"]) * 100)
+        embed.add_field(
+            name=f"{medals[i] if i<3 else f'#{i+1}'} {row['char_name']}{buff_str}",
+            value=f"{wl} | Win rate: {ratio}% | Streak: {row['streak']} | Best: {row['best_streak']}",
+            inline=False
+        )
+
+    embed.add_field(
+        name="🏆 Weekly Rewards (Top 3)",
+        value="🥇 Champion: +5 STR +3 WIS (7 days)\n🥈 Challenger: +3 STR (7 days)\n🥉 Warrior: +2 INF (7 days)",
+        inline=False
+    )
+    embed.set_footer(text="Use !duel @player to challenge | !attack @player for surprise attack")
+    await ctx.reply(embed=embed)
 
 @bot.command(name="leaderboard", aliases=["lb"])
 async def leaderboard(ctx):
@@ -1758,6 +2020,72 @@ async def on_raw_reaction_add(payload):
 # ──────────────────────────────────────────────────────────────
 # MONSTER SPAWN LOOP  [FIX-8]
 # ──────────────────────────────────────────────────────────────
+
+# ──────────────────────────────────────────────────────────────
+# WEEKLY PvP REWARD LOOP
+# ──────────────────────────────────────────────────────────────
+@tasks.loop(hours=168)
+async def pvp_weekly_rewards():
+    try:
+        con = get_db()
+        _init_pvp_tables(con)
+        rows = con.execute(
+            "SELECT user_id,char_name,wins FROM pvp_stats ORDER BY wins DESC LIMIT 3"
+        ).fetchall()
+        con.close()
+        if not rows:
+            return
+
+        buffs = [
+            ("Champion", 5, 3, 0),   # +5 STR +3 WIS
+            ("Challenger", 3, 0, 0),  # +3 STR
+            ("Warrior", 0, 0, 2),     # +2 INF
+        ]
+        buff_names = ["Champion", "Challenger", "Warrior"]
+
+        for i, row in enumerate(rows):
+            if i >= len(buffs): break
+            buff_name = buff_names[i]
+            str_bonus, wis_bonus, inf_bonus = buffs[i][1], buffs[i][2], buffs[i][3]
+            char = load_character(row["user_id"])
+            if char:
+                char["stats"]["strength"]  += str_bonus
+                char["stats"]["wisdom"]    += wis_bonus
+                char["stats"]["influence"] += inf_bonus
+                save_character(char)
+                _grant_pvp_buff(row["user_id"], buff_name)
+
+        # announce
+        for guild in bot.guilds:
+            ch = (discord.utils.get(guild.text_channels, name="world-events")
+                  or discord.utils.get(guild.text_channels, name="general"))
+            if ch:
+                embed = discord.Embed(
+                    title="🏆 Weekly PvP Rewards Distributed!",
+                    color=0xffd700
+                )
+                for i, row in enumerate(rows):
+                    if i >= len(buff_names): break
+                    embed.add_field(
+                        name=f"{['🥇','🥈','🥉'][i]} {buff_names[i]}: {row['char_name']}",
+                        value=f"Wins: {row['wins']} | 7-day stat buff granted",
+                        inline=False
+                    )
+                await ch.send(embed=embed)
+                break
+
+        # reset weekly wins
+        with db_transaction() as con:
+            _init_pvp_tables(con)
+            con.execute("UPDATE pvp_stats SET wins=0, losses=0, streak=0")
+
+    except Exception as e:
+        log.error(f"[pvp_weekly_rewards] {e}")
+
+@pvp_weekly_rewards.before_loop
+async def before_pvp_weekly():
+    await bot.wait_until_ready()
+
 @tasks.loop(seconds=MONSTER_SPAWN_INTERVAL)
 async def monster_spawn_loop():
     import random
@@ -1850,7 +2178,7 @@ Generate a dramatic World Event players must collectively decide on. JSON:
                 (event["title"], event["description"], json.dumps(options),
                  json.dumps(votes_init), "active", str(event_channel.id), _now())
             )
-            event_id = con.lastrowid
+            event_id = con.execute("SELECT last_insert_rowid()").fetchone()[0]
 
         urgency_color = {"high":0xff2200,"medium":0xff8800,"low":0x44aa00}
         color = urgency_color.get(event.get("urgency","medium"), 0xff6600)
@@ -1930,9 +2258,9 @@ async def _resolve_world_event(channel, event_id: int, event: dict):
 # RUN
 # ──────────────────────────────────────────────────────────────
 async def main():
-    token = os.getenv("DISCORD_TOKEN")
+    token = os.getenv("DISCORD_TOKEN_RPG")
     if not token:
-        print("❌ DISCORD_TOKEN not set."); return
+        print("❌ DISCORD_TOKEN_RPG not set."); return
     try:
         await bot.start(token)
     except discord.LoginFailure:
