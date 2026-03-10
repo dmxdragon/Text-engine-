@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Nixon RPG — Living World</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#06060f;overflow:hidden;font-family:'VT323',monospace;}
+  #game-container{width:100vw;height:100vh;}
+  #ui-overlay{
+    position:fixed;top:0;left:0;right:0;bottom:0;
+    pointer-events:none;z-index:10;
+  }
+  #top-bar{
+    position:absolute;top:0;left:0;right:0;height:38px;
+    background:rgba(6,6,15,0.92);border-bottom:2px solid #ffd700;
+    display:flex;align-items:center;padding:0 14px;gap:20px;
+    pointer-events:all;
+  }
+  #top-bar h1{font-family:'Press Start 2P',monospace;font-size:9px;color:#ffd700;text-shadow:0 0 8px #ffd700;}
+  .hstat{font-size:15px;color:#666;}
+  .hstat span{color:#ccc;}
+  #chapter-name{margin-left:auto;font-size:15px;color:#9944ff;}
+  #dark-age-badge{
+    background:#cc0000;color:#fff;font-size:11px;
+    padding:2px 8px;display:none;animation:pulse 1s infinite;
+  }
+  #side-panel{
+    position:absolute;top:38px;right:0;width:260px;bottom:0;
+    background:rgba(10,10,20,0.95);border-left:2px solid #1a1a3a;
+    display:flex;flex-direction:column;overflow:hidden;pointer-events:all;
+  }
+  .panel-tabs{display:flex;border-bottom:2px solid #1a1a3a;}
+  .ptab{
+    flex:1;padding:6px 2px;background:transparent;border:none;
+    color:#555;font-family:'Press Start 2P',monospace;font-size:5.5px;
+    cursor:pointer;transition:all 0.1s;
+  }
+  .ptab.active{color:#ffd700;border-bottom:2px solid #ffd700;background:#0d0d1f;}
+  .ptab:hover{color:#aaa;}
+  .panel-body{flex:1;overflow-y:auto;padding:8px;}
+  .tab-content{display:none;}
+  .tab-content.active{display:block;}
+  .entry{
+    border:1px solid #1a1a3a;padding:7px;margin-bottom:6px;
+    font-size:14px;cursor:pointer;transition:border-color 0.1s;
+  }
+  .entry:hover{border-color:#ffd700;}
+  .entry-name{font-family:'Press Start 2P',monospace;font-size:6px;color:#ffd700;margin-bottom:3px;}
+  .entry-sub{color:#555;font-size:13px;}
+  .state-controlled{border-left:3px solid #cc0000!important;}
+  .state-liberated{border-left:3px solid #00cc44!important;}
+  .state-neutral{border-left:3px solid #444!important;}
+  .state-law_protected{border-left:3px solid #4488ff!important;}
+  #bottom-bar{
+    position:absolute;bottom:0;left:0;right:260px;height:44px;
+    background:rgba(6,6,15,0.95);border-top:2px solid #1a1a3a;
+    display:flex;align-items:center;padding:0 14px;gap:8px;
+    pointer-events:all;
+  }
+  #log-text{flex:1;font-size:14px;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #refresh-btn{
+    padding:6px 12px;background:#0d0d1f;border:1px solid #333;
+    color:#888;font-family:'VT323',monospace;font-size:15px;cursor:pointer;
+  }
+  #refresh-btn:hover{border-color:#ffd700;color:#ffd700;}
+  #night-overlay{
+    position:absolute;top:38px;left:0;right:260px;bottom:44px;
+    background:rgba(0,0,30,0.35);pointer-events:none;display:none;
+  }
+  #loading{
+    position:fixed;inset:0;background:#06060f;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100;
+  }
+  #loading h1{font-family:'Press Start 2P',monospace;font-size:14px;color:#ffd700;margin-bottom:20px;text-shadow:0 0 20px #ffd700;}
+  #loading p{font-size:20px;color:#555;}
+  #tooltip{
+    position:fixed;pointer-events:none;z-index:50;
+    background:#0d0d1f;border:1px solid #ffd700;
+    padding:8px 12px;font-size:14px;max-width:180px;display:none;
+    line-height:1.6;color:#ccc;
+  }
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+  ::-webkit-scrollbar{width:3px;}
+  ::-webkit-scrollbar-thumb{background:#1a1a3a;}
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <h1>⚔ NIXON RPG</h1>
+  <p>Loading Living World...</p>
+</div>
+
+<div id="game-container"></div>
+
+<div id="ui-overlay">
+  <div id="top-bar">
+    <h1>⚔ NIXON RPG</h1>
+    <div class="hstat">CHAPTER: <span id="h-chapter">1</span></div>
+    <div class="hstat">MONSTERS: <span id="h-monsters" style="color:#cc4444">0</span></div>
+    <div class="hstat">HEROES: <span id="h-heroes" style="color:#ffd700">0</span></div>
+    <div class="hstat">INFRA: <span id="h-infra">0</span>/100</div>
+    <div id="dark-age-badge">⚠ DARK AGE</div>
+    <div id="chapter-name">Loading...</div>
+  </div>
+
+  <div id="side-panel">
+    <div class="panel-tabs">
+      <button class="ptab active" onclick="switchTab('territories')">MAP</button>
+      <button class="ptab" onclick="switchTab('heroes')">HEROES</button>
+      <button class="ptab" onclick="switchTab('monsters')">BEASTS</button>
+      <button class="ptab" onclick="switchTab('laws')">LAWS</button>
+    </div>
+    <div class="panel-body">
+      <div id="tab-territories" class="tab-content active"></div>
+      <div id="tab-heroes" class="tab-content"></div>
+      <div id="tab-monsters" class="tab-content"></div>
+      <div id="tab-laws" class="tab-content"></div>
+    </div>
+  </div>
+
+  <div id="bottom-bar">
+    <div id="log-text">⚔ Nixon RPG — Living World Engine online</div>
+    <button id="refresh-btn" onclick="fetchWorldData()">↺ REFRESH</button>
+  </div>
+
+  <div id="night-overlay"></div>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// CONFIG — change this to your server IP
+// ═══════════════════════════════════════════════════════════
+const API_BASE    = "http://45.59.113.113:8000";
+const REFRESH_MS  = 30000; // refresh every 30 seconds
+
+// ═══════════════════════════════════════════════════════════
+// WORLD DATA
+// ═══════════════════════════════════════════════════════════
+let worldData      = null;
+let charactersData = [];
+let monstersData   = [];
+let phaserScene    = null;
+
+// Territory layout (positions on map)
+const TERRITORY_LAYOUT = {
+  "The Void":        { x: 0.18, y: 0.45, r: 90 },
+  "Free Haven":      { x: 0.42, y: 0.30, r: 85 },
+  "The Forge":       { x: 0.68, y: 0.22, r: 80 },
+  "Darkwood":        { x: 0.25, y: 0.68, r: 88 },
+  "The Sunken Keep": { x: 0.72, y: 0.70, r: 85 },
+  "The Ashfields":   { x: 0.55, y: 0.55, r: 75 },
+  "Crystal Depths":  { x: 0.15, y: 0.25, r: 72 },
+  "Iron Citadel":    { x: 0.85, y: 0.45, r: 78 },
+  "The Verdant Peak":{ x: 0.50, y: 0.12, r: 70 },
+  "Shadow Crossing": { x: 0.35, y: 0.85, r: 73 },
+};
+
+const TERRITORY_CONNECTIONS = [
+  ["The Void","Free Haven"],
+  ["The Void","Darkwood"],
+  ["Free Haven","The Forge"],
+  ["Free Haven","The Sunken Keep"],
+  ["Darkwood","The Sunken Keep"],
+  ["The Forge","The Sunken Keep"],
+  ["The Ashfields","The Forge"],
+  ["The Ashfields","The Sunken Keep"],
+];
+
+const STATE_COLORS = {
+  controlled:    { fill: 0x1a0505, border: 0xcc0000, glow: "#cc0000" },
+  liberated:     { fill: 0x051a05, border: 0x00cc44, glow: "#00cc44" },
+  neutral:       { fill: 0x0d0d1a, border: 0x333366, glow: "#333366" },
+  law_protected: { fill: 0x050a1a, border: 0x4488ff, glow: "#4488ff" },
+  contested:     { fill: 0x1a0d00, border: 0xff8800, glow: "#ff8800" },
+};
+
+const ARCHETYPE_COLORS = {
+  warrior:  0xcc4400,
+  scholar:  0x4488ff,
+  shadow:   0x884488,
+  seer:     0x44ccaa,
+  wanderer: 0xaa8844,
+  herald:   0xcc8800,
+};
+
+// ═══════════════════════════════════════════════════════════
+// FETCH DATA FROM API
+// ═══════════════════════════════════════════════════════════
+async function fetchWorldData() {
+  try {
+    setLog("⟳ Fetching world state from API...");
+    const [world, chars, monsters] = await Promise.all([
+      fetch(`${API_BASE}/world`).then(r=>r.json()),
+      fetch(`${API_BASE}/characters`).then(r=>r.json()),
+      fetch(`${API_BASE}/monsters?status=alive`).then(r=>r.json()),
+    ]);
+
+    worldData      = world;
+    charactersData = Array.isArray(chars) ? chars : [];
+    monstersData   = Array.isArray(monsters) ? monsters : [];
+
+    updateUI();
+    if (phaserScene) phaserScene.updateWorld(worldData, charactersData, monstersData);
+    setLog(`✅ World updated — Chapter ${world.chapter?.id||1} | ${monstersData.length} monsters alive`);
+
+  } catch(e) {
+    setLog(`❌ API error: ${e.message} — Is the server running?`);
+  }
+}
+
+function setLog(msg) {
+  document.getElementById('log-text').textContent = msg;
+}
+
+// ═══════════════════════════════════════════════════════════
+// UPDATE UI PANELS
+// ═══════════════════════════════════════════════════════════
+function updateUI() {
+  if (!worldData) return;
+  const w = worldData;
+  const s = w.stats || {};
+
+  // Top bar
+  document.getElementById('h-chapter').textContent  = w.chapter?.id || 1;
+  document.getElementById('h-monsters').textContent = s.monsters_alive || 0;
+  document.getElementById('h-heroes').textContent   = s.total_characters || 0;
+  document.getElementById('h-infra').textContent    = w.world?.infrastructure_score || 0;
+  document.getElementById('chapter-name').textContent = w.chapter?.name || "Chapter 1";
+
+  // Dark age
+  const dab = document.getElementById('dark-age-badge');
+  dab.style.display = w.world?.is_dark_age ? 'block' : 'none';
+
+  // Night overlay
+  document.getElementById('night-overlay').style.display = w.world?.is_night ? 'block' : 'none';
+
+  // Territories panel
+  const tp = document.getElementById('tab-territories');
+  tp.innerHTML = '';
+  const terrs = w.territories || {};
+  Object.entries(terrs).forEach(([name, t]) => {
+    const icons = {controlled:"💀",liberated:"🏴",neutral:"⬜",law_protected:"⚖️",contested:"⚔️"};
+    const d = document.createElement('div');
+    d.className = `entry state-${t.state}`;
+    d.innerHTML = `
+      <div class="entry-name">${icons[t.state]||"⬜"} ${name}</div>
+      <div class="entry-sub">${t.state.toUpperCase().replace("_"," ")} | 👹${t.monsters_alive} 🗡${t.monsters_slain} ⚔${t.heroes}</div>
+    `;
+    d.onclick = () => phaserScene?.focusTerritory(name);
+    tp.appendChild(d);
+  });
+
+  // Heroes panel
+  const hp = document.getElementById('tab-heroes');
+  hp.innerHTML = '';
+  if (charactersData.length === 0) {
+    hp.innerHTML = '<div style="color:#444;font-size:14px;padding:8px">No heroes yet.<br>Use !create in Discord</div>';
+  }
+  charactersData.forEach(c => {
+    const d = document.createElement('div');
+    d.className = 'entry';
+    const s2 = c.stats || {};
+    d.innerHTML = `
+      <div class="entry-name">${c.is_nft?'🔮 ':'⚔ '}${c.name}</div>
+      <div class="entry-sub">${c.archetype?.toUpperCase()||'?'} | ⚔${s2.strength||0} 📖${s2.wisdom||0} 🌟${s2.legacy||0}</div>
+    `;
+    hp.appendChild(d);
+  });
+
+  // Monsters panel
+  const mp = document.getElementById('tab-monsters');
+  mp.innerHTML = '';
+  if (monstersData.length === 0) {
+    mp.innerHTML = '<div style="color:#444;font-size:14px;padding:8px">All monsters slain!<br>Boss fight incoming...</div>';
+  }
+  monstersData.forEach(m => {
+    const d = document.createElement('div');
+    d.className = 'entry state-controlled';
+    const hpPct = Math.round((m.hp/m.max_hp)*100);
+    d.innerHTML = `
+      <div class="entry-name">${m.is_boss?'👑 ':''} ${m.name}</div>
+      <div class="entry-sub">${m.tier?.toUpperCase()||'?'} | HP:${m.hp}/${m.max_hp} (${hpPct}%)</div>
+      <div style="height:3px;background:#330000;margin-top:4px">
+        <div style="height:100%;width:${hpPct}%;background:#cc2200"></div>
+      </div>
+    `;
+    mp.appendChild(d);
+  });
+
+  // Laws panel
+  fetchLaws();
+}
+
+async function fetchLaws() {
+  try {
+    const laws = await fetch(`${API_BASE}/laws`).then(r=>r.json());
+    const lp = document.getElementById('tab-laws');
+    lp.innerHTML = '';
+    if (!laws.length) {
+      lp.innerHTML = '<div style="color:#444;font-size:14px;padding:8px">No laws passed yet.<br>Use !law in Discord</div>';
+      return;
+    }
+    laws.forEach(l => {
+      const d = document.createElement('div');
+      d.className = 'entry';
+      d.innerHTML = `
+        <div class="entry-name">⚖ ${l.title||'Law'}</div>
+        <div class="entry-sub">${(l.description||'').slice(0,80)}</div>
+      `;
+      lp.appendChild(d);
+    });
+  } catch(e) {}
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.ptab').forEach(b=>b.classList.remove('active'));
+  document.getElementById(`tab-${name}`).classList.add('active');
+  event.target.classList.add('active');
+}
+
+// ═══════════════════════════════════════════════════════════
+// PHASER SCENE
+// ═══════════════════════════════════════════════════════════
+class WorldScene extends Phaser.Scene {
+  constructor() { super({ key: 'WorldScene' }); }
+
+  create() {
+    phaserScene = this;
+    this.W = this.scale.width;
+    this.H = this.scale.height - 82; // subtract top+bottom bars
+    this.offsetY = 38;
+
+    this.territoryGraphics  = this.add.graphics();
+    this.connectionGraphics = this.add.graphics();
+    this.particleGraphics   = this.add.graphics();
+
+    this.territories = {};
+    this.charSprites = {};
+    this.monsterSprites = {};
+    this.particles   = [];
+    this.floatTexts  = [];
+    this.time_t      = 0;
+
+    // Camera pan/zoom
+    this.cameras.main.setBounds(0, 0, this.W, this.H + this.offsetY);
+
+    // Initial draw
+    this.drawConnections();
+    this.drawGrid();
+
+    // Start fetching
+    fetchWorldData();
+    setInterval(fetchWorldData, REFRESH_MS);
+  }
+
+  drawGrid() {
+    const g = this.add.graphics();
+    g.lineStyle(1, 0x0d0d1a, 1);
+    for (let x=0; x<this.W; x+=24) {
+      g.moveTo(x, 0); g.lineTo(x, this.H+this.offsetY);
+    }
+    for (let y=0; y<this.H+this.offsetY; y+=24) {
+      g.moveTo(0, y); g.lineTo(this.W, y);
+    }
+    g.strokePath();
+    g.setDepth(0);
+  }
+
+  drawConnections() {
+    this.connectionGraphics.clear();
+    this.connectionGraphics.setDepth(1);
+    TERRITORY_CONNECTIONS.forEach(([a,b]) => {
+      const la = TERRITORY_LAYOUT[a], lb = TERRITORY_LAYOUT[b];
+      if (!la || !lb) return;
+      const x1 = la.x * this.W, y1 = la.y * this.H + this.offsetY;
+      const x2 = lb.x * this.W, y2 = lb.y * this.H + this.offsetY;
+      this.connectionGraphics.lineStyle(1, 0x1a1a2e, 0.8);
+      this.connectionGraphics.beginPath();
+      this.connectionGraphics.moveTo(x1,y1);
+      this.connectionGraphics.lineTo(x2,y2);
+      this.connectionGraphics.strokePath();
+    });
+  }
+
+  updateWorld(world, chars, monsters) {
+    this.worldData  = world;
+    this.charsData  = chars;
+    this.monstersData = monsters;
+
+    this.drawTerritories(world?.territories || {});
+    this.updateCharacters(chars);
+    this.updateMonsters(monsters);
+  }
+
+  drawTerritories(territories) {
+    this.territoryGraphics.clear();
+    this.territoryGraphics.setDepth(2);
+
+    // Clear old territory objects
+    Object.values(this.territories).forEach(t => {
+      if (t.label) t.label.destroy();
+      if (t.icon)  t.icon.destroy();
+      if (t.hpBar) t.hpBar.destroy();
+    });
+    this.territories = {};
+
+    Object.entries(territories).forEach(([name, state]) => {
+      const layout = TERRITORY_LAYOUT[name];
+      if (!layout) return;
+
+      const cx = layout.x * this.W;
+      const cy = layout.y * this.H + this.offsetY;
+      const r  = layout.r + Math.sin(this.time_t * 0.01) * 3;
+
+      const sc = STATE_COLORS[state.state] || STATE_COLORS.neutral;
+
+      // Glow
+      this.territoryGraphics.fillStyle(sc.border, 0.08);
+      this.drawHex(this.territoryGraphics, cx, cy, r + 12);
+
+      // Fill
+      this.territoryGraphics.fillStyle(sc.fill, 1);
+      this.drawHex(this.territoryGraphics, cx, cy, r);
+
+      // Border (pixel-style dashed effect — drawn as segments)
+      for (let i=0;i<6;i++) {
+        if (i%2===0) {
+          const a1 = (Math.PI/3)*i - Math.PI/6;
+          const a2 = (Math.PI/3)*(i+0.7) - Math.PI/6;
+          this.territoryGraphics.lineStyle(2, sc.border, 0.9);
+          this.territoryGraphics.beginPath();
+          this.territoryGraphics.moveTo(cx+r*Math.cos(a1), cy+r*Math.sin(a1));
+          this.territoryGraphics.lineTo(cx+r*Math.cos(a2), cy+r*Math.sin(a2));
+          this.territoryGraphics.strokePath();
+        }
+      }
+
+      // Inner texture dots
+      this.territoryGraphics.fillStyle(sc.border, 0.15);
+      for (let i=0;i<6;i++) {
+        const dx = (Math.random()-0.5)*r*1.0;
+        const dy = (Math.random()-0.5)*r*0.7;
+        this.territoryGraphics.fillRect(cx+dx, cy+dy, 3, 3);
+      }
+
+      // Territory name label
+      const existing = this.territories[name];
+      const label = this.add.text(cx, cy + r + 12, name.toUpperCase(), {
+        fontFamily: "'VT323', monospace",
+        fontSize: '11px',
+        color: state.state === 'controlled' ? '#ff4444' :
+               state.state === 'liberated'  ? '#44ff88' :
+               state.state === 'law_protected' ? '#88aaff' : '#8888aa',
+      }).setOrigin(0.5, 0).setDepth(5);
+
+      // Status icon
+      const icons = {controlled:"💀",liberated:"🏴",law_protected:"⚖",neutral:"",contested:"⚔"};
+      const iconText = icons[state.state] || '';
+      const icon = iconText ? this.add.text(cx, cy - r + 8, iconText, {
+        fontSize: '16px'
+      }).setOrigin(0.5, 1).setDepth(5) : null;
+
+      // Monster count badge
+      let hpBar = null;
+      if (state.monsters_alive > 0) {
+        hpBar = this.add.text(cx, cy, `👹×${state.monsters_alive}`, {
+          fontFamily: "'VT323', monospace",
+          fontSize: '14px',
+          color: '#ff4444',
+        }).setOrigin(0.5).setDepth(5);
+      } else if (state.state === 'liberated') {
+        hpBar = this.add.text(cx, cy, '✓ FREE', {
+          fontFamily: "'VT323', monospace",
+          fontSize: '14px',
+          color: '#00cc44',
+        }).setOrigin(0.5).setDepth(5);
+      }
+
+      this.territories[name] = { cx, cy, r, state, label, icon, hpBar };
+
+      // Make clickable
+      const zone = this.add.zone(cx, cy, r*2, r*2).setDepth(6).setInteractive();
+      zone.on('pointerover', () => this.showTooltip(name, state, cx, cy));
+      zone.on('pointerout',  () => this.hideTooltip());
+      zone.on('pointerdown', () => this.onTerritoryClick(name, state));
+    });
+  }
+
+  drawHex(g, cx, cy, r) {
+    g.beginPath();
+    for (let i=0;i<6;i++) {
+      const a = (Math.PI/3)*i - Math.PI/6;
+      i===0 ? g.moveTo(cx+r*Math.cos(a), cy+r*Math.sin(a))
+             : g.lineTo(cx+r*Math.cos(a), cy+r*Math.sin(a));
+    }
+    g.closePath();
+    g.fillPath();
+  }
+
+  updateCharacters(chars) {
+    // Remove old
+    Object.values(this.charSprites).forEach(s => { s.body?.destroy(); s.label?.destroy(); });
+    this.charSprites = {};
+
+    chars.forEach((char, i) => {
+      const terr = TERRITORY_LAYOUT[char.territory] || TERRITORY_LAYOUT["Free Haven"];
+      const cx = terr.x * this.W + (Math.sin(i*1.3)*30);
+      const cy = terr.y * this.H + this.offsetY + (Math.cos(i*0.9)*20);
+      const color = ARCHETYPE_COLORS[char.archetype] || 0xaa8844;
+
+      // Draw pixel character
+      const g = this.add.graphics().setDepth(8);
+      this.drawPixelChar(g, 0, 0, color, char.is_nft);
+      g.setPosition(cx, cy);
+
+      const label = this.add.text(cx, cy+20, char.name.split(" ")[0], {
+        fontFamily:"'VT323',monospace", fontSize:'11px',
+        color: char.is_nft ? '#ffd700' : '#aaaacc',
+      }).setOrigin(0.5).setDepth(8);
+
+      this.charSprites[char.id] = { body: g, label, cx, cy };
+    });
+  }
+
+  drawPixelChar(g, x, y, color, isNft) {
+    const s = 5;
+    // legs
+    g.fillStyle(isNft ? 0x886600 : 0x444466, 1);
+    g.fillRect(x-s*0.3, y+s*0.5, s*0.3, s*0.6);
+    g.fillRect(x+s*0.0, y+s*0.5, s*0.3, s*0.6);
+    // torso
+    g.fillStyle(color, 1);
+    g.fillRect(x-s*0.4, y, s*0.8, s*0.6);
+    // head
+    g.fillStyle(0xf0d080, 1);
+    g.fillRect(x-s*0.3, y-s*0.5, s*0.6, s*0.5);
+    // NFT crown
+    if (isNft) {
+      g.fillStyle(0xffd700, 1);
+      g.fillRect(x-s*0.3, y-s*0.65, s*0.15, s*0.18);
+      g.fillRect(x-s*0.08, y-s*0.72, s*0.16, s*0.25);
+      g.fillRect(x+s*0.12, y-s*0.65, s*0.15, s*0.18);
+    }
+  }
+
+  updateMonsters(monsters) {
+    Object.values(this.monsterSprites).forEach(s => { s.body?.destroy(); s.label?.destroy(); });
+    this.monsterSprites = {};
+
+    monsters.forEach((mon, i) => {
+      const terr = TERRITORY_LAYOUT[mon.territory] || TERRITORY_LAYOUT["The Void"];
+      const cx = terr.x * this.W + (Math.cos(i*2.1)*35);
+      const cy = terr.y * this.H + this.offsetY + (Math.sin(i*1.7)*25);
+
+      const g = this.add.graphics().setDepth(7);
+      this.drawPixelMonster(g, 0, 0, mon.is_boss);
+      g.setPosition(cx, cy);
+
+      const label = this.add.text(cx, cy+18, mon.name.split(" ")[0], {
+        fontFamily:"'VT323',monospace", fontSize:'11px',
+        color: mon.is_boss ? '#ff4444' : '#cc4444',
+      }).setOrigin(0.5).setDepth(7);
+
+      this.monsterSprites[mon.id] = { body: g, label, cx, cy };
+    });
+  }
+
+  drawPixelMonster(g, x, y, isBoss) {
+    const s = isBoss ? 8 : 5;
+    g.fillStyle(isBoss ? 0xcc0000 : 0x882222, 1);
+    g.fillRect(x-s*0.5, y-s*0.3, s, s*0.7);
+    // eyes
+    g.fillStyle(0xff2200, 1);
+    g.fillRect(x-s*0.3, y-s*0.2, s*0.2, s*0.2);
+    g.fillRect(x+s*0.1,  y-s*0.2, s*0.2, s*0.2);
+    if (isBoss) {
+      // crown spikes
+      g.fillStyle(0xff0000, 1);
+      for (let i=-1;i<=1;i++) g.fillRect(x+i*s*0.25, y-s*0.5, s*0.12, s*0.22);
+    }
+  }
+
+  onTerritoryClick(name, state) {
+    // Spawn click particles
+    const t = this.territories[name];
+    if (!t) return;
+    const sc = STATE_COLORS[state.state] || STATE_COLORS.neutral;
+    for (let i=0;i<12;i++) {
+      this.particles.push({
+        x: t.cx, y: t.cy,
+        vx: (Math.random()-0.5)*4,
+        vy: (Math.random()-0.5)*4 - 1,
+        color: sc.border,
+        life: 30, maxLife: 30, size: 3
+      });
+    }
+    setLog(`📍 ${name} — ${state.state.toUpperCase().replace("_"," ")} | 👹${state.monsters_alive} monsters | 🗡${state.monsters_slain} slain`);
+  }
+
+  focusTerritory(name) {
+    const t = this.territories[name];
+    if (!t) return;
+    this.cameras.main.pan(t.cx, t.cy, 500, 'Power2');
+  }
+
+  showTooltip(name, state, cx, cy) {
+    const tt = document.getElementById('tooltip');
+    const sc = STATE_COLORS[state.state] || STATE_COLORS.neutral;
+    tt.innerHTML = `
+      <b style="color:#ffd700">${name}</b><br>
+      State: <span style="color:${state.state==='controlled'?'#ff4444':state.state==='liberated'?'#44ff88':'#8888aa'}">${state.state.replace("_"," ").toUpperCase()}</span><br>
+      Monsters: <span style="color:#cc4444">${state.monsters_alive}</span><br>
+      Slain: <span style="color:#44ff88">${state.monsters_slain}</span><br>
+      Heroes: <span style="color:#ffd700">${state.heroes}</span>
+    `;
+    tt.style.display = 'block';
+    tt.style.left = (cx + 20) + 'px';
+    tt.style.top  = (cy - 20) + 'px';
+  }
+
+  hideTooltip() {
+    document.getElementById('tooltip').style.display = 'none';
+  }
+
+  update() {
+    this.time_t++;
+
+    // Animate character sprites (bob up/down)
+    Object.entries(this.charSprites).forEach(([id, s], i) => {
+      if (!s.body) return;
+      const bob = Math.sin(this.time_t * 0.04 + i * 1.3) * 2;
+      s.body.setPosition(s.cx, s.cy + bob);
+      s.label.setPosition(s.cx, s.cy + bob + 20);
+    });
+
+    // Animate monster sprites
+    Object.entries(this.monsterSprites).forEach(([id, s], i) => {
+      if (!s.body) return;
+      const bob = Math.sin(this.time_t * 0.03 + i * 0.7) * 2;
+      s.body.setPosition(s.cx, s.cy + bob);
+      s.label.setPosition(s.cx, s.cy + bob + 18);
+    });
+
+    // Particles
+    const pg = this.particleGraphics;
+    pg.clear(); pg.setDepth(9);
+    this.particles = this.particles.filter(p => p.life > 0);
+    this.particles.forEach(p => {
+      pg.fillStyle(p.color, p.life/p.maxLife);
+      pg.fillRect(p.x, p.y, p.size, p.size);
+      p.x += p.vx; p.y += p.vy; p.vy += 0.08; p.life--;
+    });
+
+    // Floating texts
+    this.floatTexts = this.floatTexts.filter(ft => ft.life > 0);
+    this.floatTexts.forEach(ft => {
+      ft.obj.setAlpha(ft.life/ft.maxLife);
+      ft.obj.y -= 0.8;
+      ft.life--;
+      if (ft.life <= 0) ft.obj.destroy();
+    });
+
+    // Redraw territories periodically for glow animation
+    if (this.time_t % 120 === 0 && this.worldData) {
+      this.drawTerritories(this.worldData.territories || {});
+    }
+  }
+
+  addFloatText(x, y, text, color='#ffd700') {
+    const obj = this.add.text(x, y, text, {
+      fontFamily:"'VT323',monospace", fontSize:'18px', color
+    }).setOrigin(0.5).setDepth(10);
+    this.floatTexts.push({ obj, life: 60, maxLife: 60 });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// PHASER CONFIG
+// ═══════════════════════════════════════════════════════════
+const config = {
+  type: Phaser.AUTO,
+  width:  window.innerWidth - 260,
+  height: window.innerHeight,
+  backgroundColor: '#06060f',
+  parent: 'game-container',
+  pixelArt: true,
+  antialias: false,
+  scene: WorldScene,
+};
+
+const game = new Phaser.Game(config);
+
+window.addEventListener('resize', () => {
+  game.scale.resize(window.innerWidth - 260, window.innerHeight);
+});
+
+// Hide loading screen
+setTimeout(() => {
+  document.getElementById('loading').style.display = 'none';
+}, 1500);
+</script>
+</body>
+</html>

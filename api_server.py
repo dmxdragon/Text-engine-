@@ -16,7 +16,8 @@ import datetime
 from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -37,6 +38,17 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+# Serve static files from /static folder
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+os.makedirs(STATIC_DIR, exist_ok=True)
+
+@app.get("/", response_class=HTMLResponse)
+def serve_index():
+    index_path = os.path.join(STATIC_DIR, "nixon-world.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return HTMLResponse("<h1 style='color:#ffd700;background:#06060f;padding:40px;font-family:monospace'>Nixon RPG API Online - place nixon-world.html in /static</h1>")
 
 # ──────────────────────────────────────────────────────────────
 # DB HELPERS
