@@ -1,0 +1,66 @@
+{
+  "tiles": {
+    "grass":       "assets/tiles/grass.png",
+    "stone":       "assets/tiles/stone.png",
+    "dirt":        "assets/tiles/dirt.png",
+    "water":       "assets/tiles/water.png",
+    "dark_ground": "assets/tiles/dark_ground.png"
+  },
+
+  "objects": {
+    "chest":         "assets/objects/chest.png",
+    "chest_gold":    "assets/objects/chest_gold.png",
+    "barrel":        "assets/objects/barrel.png",
+    "torch":         "assets/objects/torch.png",
+    "blue_torch":    "assets/objects/blue_torch.png",
+    "campfire":      "assets/objects/campfire.png",
+    "magic_fire":    "assets/objects/magic_fire.png",
+    "well":          "assets/objects/well.png",
+    "lantern":       "assets/objects/lantern.png",
+    "painting":      "assets/objects/painting.png",
+    "workbench":     "assets/objects/workbench.png",
+    "sign":          "assets/objects/sign.png"
+  },
+
+  "buildings": {
+    "wooden_wall":   "assets/objects/wooden_wall.png",
+    "wooden_door":   "assets/objects/wooden_door.png",
+    "wooden_fence":  "assets/objects/wooden_fence.png",
+    "wooden_stairs": "assets/objects/wooden_stairs.png",
+    "wooden_rail":   "assets/objects/wooden_rail.png",
+    "stone_wall":    "assets/objects/stone_wall.png",
+    "stone_arch":    "assets/objects/stone_arch.png",
+    "stone_tower":   "assets/objects/stone_tower.png",
+    "stone_ledge":   "assets/objects/stone_ledge.png",
+    "brick_wall":    "assets/objects/brick_wall.png",
+    "iron_gate":     "assets/objects/iron_gate.png",
+    "ivy_wall":      "assets/objects/ivy_wall.png",
+    "dark_window":   "assets/objects/dark_window.png"
+  },
+
+  "heroes": {
+    "warrior": "assets/heroes/warrior.png",
+    "ranger":  "assets/heroes/ranger.png",
+    "archer":  "assets/heroes/archer.png",
+    "rogue":   "assets/heroes/rogue.png"
+  },
+
+  "monsters": {
+    "orc":        "assets/monster/orc.png",
+    "dark_orc":   "assets/monster/dark_orc.png",
+    "orc_archer": "assets/monster/orc_archer.png",
+    "boss":       "assets/monster/boss.png"
+  },
+
+  "sounds": {
+    "bgm_world":   "assets/sounds/bgm_world.mp3",
+    "bgm_battle":  "assets/sounds/bgm_battle.mp3",
+    "bgm_boss":    "assets/sounds/bgm_boss.mp3",
+    "bgm_darkage": "assets/sounds/bgm_darkage.mp3",
+    "bgm_tavern":  "assets/sounds/bgm_tavern.mp3",
+    "sfx_hit":     "assets/sounds/sfx_hit.mp3",
+    "sfx_death":   "assets/sounds/sfx_death.mp3",
+    "sfx_levelup": "assets/sounds/sfx_levelup.mp3",
+    "sfx_click":   "assets/sounds/sfx_click.mp3"
+  }
+}

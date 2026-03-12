@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Nixon RPG — Living World Engine</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323:wght@400&display=swap');
+
+  *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    background: #02020a;
+    width: 100vw; height: 100vh;
+    overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    cursor: crosshair;
+  }
+
+  /* ── Loading Screen ── */
+  #loading {
+    position: fixed; inset: 0;
+    background: #02020a;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    z-index: 999; gap: 20px;
+    transition: opacity 0.6s;
+  }
+
+  #loading-logo {
+    font-family: 'Press Start 2P', monospace;
+    font-size: clamp(14px, 3.5vw, 28px);
+    color: #ffd700;
+    text-shadow: 0 0 40px #ffd700aa, 0 0 80px #ff880044;
+    animation: pulse 1.8s ease-in-out infinite alternate;
+    letter-spacing: 4px;
+  }
+
+  #loading-sub {
+    font-family: 'VT323', monospace;
+    font-size: 20px;
+    color: #555;
+    letter-spacing: 3px;
+  }
+
+  #loading-bar-wrap {
+    width: min(420px, 80vw);
+    border: 1px solid #222;
+    padding: 3px;
+  }
+
+  #loading-bar {
+    height: 8px;
+    background: linear-gradient(90deg, #ffd700, #ff8800, #ff4400);
+    width: 0%;
+    transition: width 0.15s ease;
+    box-shadow: 0 0 8px #ffd700;
+  }
+
+  #loading-text {
+    font-family: 'VT323', monospace;
+    font-size: 16px;
+    color: #333;
+    min-width: 200px;
+    text-align: center;
+  }
+
+  .loading-tips {
+    font-family: 'VT323', monospace;
+    font-size: 18px;
+    color: #444;
+    text-align: center;
+    max-width: 400px;
+    padding: 0 20px;
+  }
+
+  @keyframes pulse {
+    from { text-shadow: 0 0 10px #ffd700; }
+    to   { text-shadow: 0 0 50px #ffd700, 0 0 80px #ff8800; }
+  }
+
+  /* ── Controls HUD ── */
+  #controls-hint {
+    position: fixed;
+    bottom: 8px; left: 50%;
+    transform: translateX(-50%);
+    font-family: 'VT323', monospace;
+    font-size: 14px;
+    color: #333;
+    pointer-events: none;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<!-- Loading Screen -->
+<div id="loading">
+  <div id="loading-logo">⚔ NIXON RPG</div>
+  <div id="loading-sub">LIVING WORLD ENGINE</div>
+  <div id="loading-bar-wrap"><div id="loading-bar"></div></div>
+  <div id="loading-text">Initializing...</div>
+  <div class="loading-tips" id="loading-tip">Loading world engine...</div>
+</div>
+
+<!-- Game Canvas -->
+<canvas id="game-canvas"></canvas>
+
+<!-- ════════════════════ ENGINE SCRIPTS (load order matters) ════════════════════ -->
+
+<!-- 1. Core systems (no dependencies) -->
+<script src="engine/core.js"></script>
+<script src="engine/loader.js"></script>      <!-- AssetLoader, SpriteSheet, Tileset -->
+<script src="engine/audio.js"></script>       <!-- AudioEngine -->
+<script src="engine/systems.js"></script>     <!-- Camera, PhysicsEngine, ParticleSystem, APIBridge -->
+<script src="engine/input.js"></script>       <!-- InputManager -->
+
+<!-- 2. Entity & state (depend on core) -->
+<script src="engine/entity.js"></script>      <!-- Entity, StateMachine, ObjectPool -->
+<script src="engine/sprite.js"></script>      <!-- SpriteEntity, CharacterEntity, MonsterEntity -->
+<script src="engine/tilemap.js"></script>     <!-- TileMap, territories -->
+<script src="engine/scenes.js"></script>      <!-- SceneManager, Scene, transitions -->
+
+<!-- 3. UI & tools (depend on all above) -->
+<script src="engine/ui.js"></script>          <!-- UISystem, UIText, UIButton, UIBar, UIPanel, UIDialog -->
+                                              <!-- SaveSystem, ScreenEffects, TimeManager, DebugTools -->
+                                              <!-- ResponsiveManager -->
+
+<!-- 4. Game scenes -->
+<script src="scenes/world.js"></script>       <!-- WorldScene -->
+
+<!-- ════════════════════ BOOT ════════════════════ -->
+<script>
+(async () => {
+  const loadingEl  = document.getElementById("loading");
+  const barEl      = document.getElementById("loading-bar");
+  const textEl     = document.getElementById("loading-text");
+  const tipEl      = document.getElementById("loading-tip");
+
+  const tips = [
+    "WASD or Arrow keys to pan the map",
+    "Scroll wheel to zoom in/out",
+    "Click on heroes or monsters to inspect",
+    "Double-click canvas for fullscreen",
+    "Press F1 to toggle debug mode",
+    "Press M to mute/unmute audio",
+    "Press P to pause the game",
+    "Press R to reset zoom",
+    "World updates every 30 seconds from the Discord bot",
+  ];
+  let tipIdx = 0;
+  const tipInterval = setInterval(() => {
+    tipEl.textContent = tips[tipIdx++ % tips.length];
+  }, 2500);
+
+  // ── Init Engine ──
+  const engine = new NixonEngine({
+    width:   1280,
+    height:  720,
+    tileSize: 32,
+    apiBase: "http://45.59.113.113:8000",
+    debug:   false,
+  });
+
+  textEl.textContent = "Creating engine...";
+  await engine.init();
+
+  // ── Loading progress ──
+  engine.on("loader:progress", ({ progress, name }) => {
+    barEl.style.width  = (progress * 100) + "%";
+    textEl.textContent = name;
+  });
+
+  engine.on("loader:complete", ({ loaded, total }) => {
+    textEl.textContent = `Loaded ${loaded}/${total} assets`;
+    barEl.style.width  = "100%";
+  });
+
+  // ── Register scenes ──
+  engine.scenes.register("world", WorldScene);
+
+  // ── API event handlers ──
+  engine.on("api:updated", async (data) => {
+    const world = data.world;
+    if (!world) return;
+
+    // Chapter transition
+    const chId = world?.chapter?.id;
+    if (engine._lastChapter !== null && engine._lastChapter !== chId) {
+      await engine.scenes.chapterTransition(world);
+      engine.camera.shake(18, 1.0);
+      engine.effects.flash("#ffd700", 0.3, 0.4);
+      engine.audio.playLevelUp();
+    }
+    engine._lastChapter = chId;
+  });
+
+  engine.on("api:error", ({ error }) => {
+    engine.debug.log(`API: ${error}`);
+  });
+
+  // Physics collision → particles
+  engine.on("physics:collision", ({ a, b }) => {
+    if (a.hasTag?.("projectile") || b.hasTag?.("projectile")) {
+      engine.particles.hitEffect((a.x+b.x)/2, (a.y+b.y)/2);
+    }
+  });
+
+  // ── Start world scene ──
+  textEl.textContent = "Loading world...";
+  await engine.scenes.start("world");
+
+  // ── Hide loading ──
+  clearInterval(tipInterval);
+  loadingEl.style.opacity = "0";
+  setTimeout(() => {
+    loadingEl.style.display = "none";
+    document.getElementById("controls-hint").style.display = "block";
+  }, 600);
+
+  // ── Start loop ──
+  engine.start();
+
+  // ── Dark age ambient vignette ──
+  engine.effects.vignette(0.35);
+
+  // ── Expose globally for debugging ──
+  window.engine = engine;
+
+  console.log("⚔ Nixon RPG ready!");
+  console.log("   window.engine = engine (debug access)");
+})();
+</script>
+
+</body>
+</html>
